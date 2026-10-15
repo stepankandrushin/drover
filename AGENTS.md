@@ -5,12 +5,13 @@ rules first (explicit, paths, names, keywords, Claude Code history), a local LLM
 not agree. One file, `drover`, Python 3.9+ standard library only. README.md is the user's manual;
 this file is how to work on it.
 
-- **Meant to be published.** Keep tracked files, history/ included, free of the owner's hosts, addresses, names,
+- **Public**, MIT: origin pushes to github.com/stepankandrushin/drover as well as the two git
+  servers, and a pushed commit cannot be taken back (GitHub serves it by SHA after a force-push).
+  Keep tracked files and commit messages, history/ included, free of the owner's hosts, addresses, names,
   repos and tasks. The owner's own config is drover/config.ini in the dotfiles repo beside this
   one (linked as ~/.config/drover/config.ini by its install.sh), and the owner runs drover as the
   alias `d`; that setup's history is there too.
-  Examples in README.md and config.example.ini use neutral names. Before publishing, the owner
-  still has to pick a license.
+  Examples in README.md and config.example.ini use neutral names.
 - **Python 3.9, standard library only.** macOS's system Python (Xcode's) is 3.9: no `match`, no `X | Y`
   annotations, no `tomllib` (that is why the config is INI). No third-party imports.
 - **Rules decide only when they agree** (README.md, "How it decides"). A new rule becomes another
