@@ -139,31 +139,40 @@ class Summary(unittest.TestCase):
                          "omni: A voice page. On demand.")
 
 
-class Input(io.StringIO):
-    def __init__(self, text, tty):
-        io.StringIO.__init__(self, text)
-        self.tty = tty
-
+class Pipe(io.StringIO):
     def isatty(self):
-        return self.tty
+        return False
 
 
 class ReadTask(unittest.TestCase):
-    def read(self, words, text, tty):
+    def read(self, words, stdin):
         err, sys.stderr = sys.stderr, io.StringIO()
         try:
-            return drover.read_task(words, Input(text, tty))
+            return drover.read_task(words, stdin)
         finally:
             sys.stderr = err
 
+    def typed(self, words, keys):
+        """read_task on a real terminal that the keys were typed into (\x04 is Ctrl-D)."""
+        master, slave = os.openpty()
+        try:
+            os.write(master, keys)
+            with os.fdopen(slave) as tty:
+                return self.read(words, tty)
+        finally:
+            os.close(master)
+
     def test_words_then_lines_up_to_ctrl_d_on_a_terminal(self):
-        self.assertEqual(self.read(["fix", "the", "camera"], "it drops frames\n\n", True),
+        self.assertEqual(self.typed(["fix", "the", "camera"], b"it drops frames\n\n\x04"),
                          "fix the camera\nit drops frames")
-        self.assertEqual(self.read(["fix", "it"], "", True), "fix it")
+        self.assertEqual(self.typed(["fix", "it"], b"\x04"), "fix it")
+
+    def test_one_ctrl_d_at_the_end_of_the_text(self):
+        self.assertEqual(self.typed([], b"two\nlines\x04never read\n\x04"), "two\nlines")
 
     def test_words_alone_from_a_pipe(self):
-        self.assertEqual(self.read(["--", "fix", "-n"], "not read\n", False), "fix -n")
-        self.assertEqual(self.read([], "piped task\n", False), "piped task")
+        self.assertEqual(self.read(["--", "fix", "-n"], Pipe("not read\n")), "fix -n")
+        self.assertEqual(self.read([], Pipe("piped task\n")), "piped task")
 
 
 if __name__ == "__main__":

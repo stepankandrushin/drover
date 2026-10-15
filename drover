@@ -22,6 +22,7 @@ Python 3.9+ standard library only. Configuration: ~/.config/drover/config.ini (s
 """
 
 import argparse
+import atexit
 import configparser
 import datetime
 import glob
@@ -811,12 +812,33 @@ def read_task(words, stdin=None):
     first = " ".join(words[1:] if words[:1] == ["--"] else words).strip()
     if not stdin.isatty():
         return first or stdin.read().strip()
-    sys.stderr.write("  more lines, or Ctrl-D on an empty line to route it\n" if first else
-                     "Task (finish with Ctrl-D on an empty line):\n")
-    rest = stdin.read()
-    if rest and not rest.endswith("\n"):  # Ctrl-D twice after the text: the cursor is still on its line
+    sys.stderr.write("  more lines, or Ctrl-D to route it\n" if first else "Task (finish with Ctrl-D):\n")
+    rest = read_tty(stdin.fileno())
+    if rest and not rest.endswith("\n"):  # Ctrl-D after the text: the cursor is still on its line
         sys.stderr.write("\n")
     return (first + "\n" + rest).strip()
+
+
+def read_tty(fd):
+    """Lines from a terminal up to the first Ctrl-D. A terminal hands over one line per read, and
+    Ctrl-D hands over the line so far without its newline, or nothing on an empty line, where a
+    plain read() would go on until a Ctrl-D on an empty line."""
+    data = b""
+    while True:
+        chunk = os.read(fd, 65536)
+        data += chunk
+        if not chunk.endswith(b"\n"):
+            return data.decode("utf-8", "replace")
+
+
+def drop_typeahead():
+    """Throw away what was typed while drover worked, such as Ctrl-D pressed once more, so that the
+    shell does not read it next."""
+    try:
+        import termios
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except Exception:
+        pass
 
 
 def log(entry):
@@ -843,6 +865,8 @@ def cmd_route(argv):
                          "read from stdin when absent")
     a = ap.parse_args(argv)
     task = read_task(a.task)
+    if sys.stdin.isatty():
+        atexit.register(drop_typeahead)
     if not task:
         raise SystemExit("drover: no task")
     SHOW_STATUS = sys.stderr.isatty()
