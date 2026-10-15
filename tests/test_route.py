@@ -171,6 +171,14 @@ class ReadTask(unittest.TestCase):
     def test_one_ctrl_d_at_the_end_of_the_text(self):
         self.assertEqual(self.typed([], b"two\nlines\x04never read\n\x04"), "two\nlines")
 
+    def test_two_empty_lines_end_the_task(self):
+        self.assertEqual(self.typed([], b"two\nlines\n\n\n"), "two\nlines")
+        self.assertEqual(self.typed(["fix", "it"], b"\n\n"), "fix it")
+        self.assertEqual(self.typed(["fix", "it"], b"one empty line\n\n\x04"), "fix it\none empty line")
+
+    def test_empty_lines_inside_a_paste_do_not(self):
+        self.assertEqual(self.typed([], b"pasted\n\n\nand more\n\n\n"), "pasted\n\n\nand more")
+
     def test_words_alone_from_a_pipe(self):
         self.assertEqual(self.read(["--", "fix", "-n"], Pipe("not read\n")), "fix -n")
         self.assertEqual(self.read([], Pipe("piped task\n")), "piped task")
