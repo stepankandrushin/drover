@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """drover: send a task to the project it belongs to and start a coding agent there in herdr.
 
-    drover "the gate camera stopped recording"     route, open a herdr tab, start the agent
+    drover the gate camera stopped recording       route, open a herdr tab, start the agent; on a terminal
+                                                   more lines may follow, then Ctrl-D (quotes are optional)
     drover                                         read the task from stdin (paste, then Ctrl-D)
     drover -n "..."                                show where it would go and why; start nothing
     drover @infra "..."   drover -C ~/x "..."      skip routing
@@ -533,6 +534,7 @@ def by_keywords(task, cfg, places):
                 if re.search(pat, task, re.I):
                     hits[by_name(places, name).name] += 1
             except re.error as e:
+                status()
                 sys.stderr.write("drover: bad keyword %r for %s: %s\n" % (kw, name, e))
     return [n for n, _ in hits.most_common()]
 
@@ -606,6 +608,7 @@ def route(task, places, cfg, index=None, use_model=True, context="", explicit=No
             usage = index.recent(now=now) if index is not None else []
             pick = ask_model(task, places, cfg, hints, context, usage, examples)
         except ModelError as e:
+            status()
             sys.stderr.write("drover: model: %s\n" % e)
             pick = None
         if pick:
@@ -682,6 +685,7 @@ def ask_model(task, places, cfg, hints, context, usage=(), examples=()):
         url = url.rstrip("/")
         if not url.endswith("/chat/completions"):
             url += "/chat/completions"
+        status("asking the model at %s" % url.split("/")[2])
         req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
                                      headers={"Content-Type": "application/json"})
         if m.get("api_key"):
@@ -775,6 +779,7 @@ def launch(place_name, path, title, task, cfg, focus=False):
         herdr("workspace", "focus", ws)
         herdr("tab", "focus", tab)
 
+    status("waiting for the agent to start in %s" % tab)
     agent = None
     for _ in range(40):
         try:
@@ -789,6 +794,31 @@ def launch(place_name, path, title, task, cfg, focus=False):
 
 # ---------------------------------------------------------------- commands
 
+SHOW_STATUS = False  # cmd_route turns it on when stderr is a terminal
+
+
+def status(msg=""):
+    """Say what drover is doing, on a terminal line that the next status or message replaces."""
+    if SHOW_STATUS:
+        sys.stderr.write("\r\033[K" + ("  %s …" % msg if msg else ""))
+        sys.stderr.flush()
+
+
+def read_task(words, stdin=None):
+    """The words after the options and, on a terminal, the lines typed or pasted below them up to
+    Ctrl-D, so that a task needs no quotes and may run over many lines."""
+    stdin = stdin or sys.stdin
+    first = " ".join(words[1:] if words[:1] == ["--"] else words).strip()
+    if not stdin.isatty():
+        return first or stdin.read().strip()
+    sys.stderr.write("  more lines, or Ctrl-D on an empty line to route it\n" if first else
+                     "Task (finish with Ctrl-D on an empty line):\n")
+    rest = stdin.read()
+    if rest and not rest.endswith("\n"):  # Ctrl-D twice after the text: the cursor is still on its line
+        sys.stderr.write("\n")
+    return (first + "\n" + rest).strip()
+
+
 def log(entry):
     try:
         os.makedirs(STATE, exist_ok=True)
@@ -799,21 +829,24 @@ def log(entry):
 
 
 def cmd_route(argv):
+    global SHOW_STATUS
     ap = argparse.ArgumentParser(prog="drover", description="Route a task to its project and start an agent there in herdr.")
     ap.add_argument("-n", "--dry-run", action="store_true", help="show where the task would go; start nothing")
     ap.add_argument("-C", "--dir", help="a place name or directory: skip routing")
     ap.add_argument("-f", "--focus", action="store_true", help="switch to the new tab")
     ap.add_argument("--no-model", action="store_true", help="rules only")
     ap.add_argument("--no-history", action="store_true", help="do not consult the Claude Code history")
-    ap.add_argument("task", nargs="*", help="the task; read from stdin when absent")
+    # Everything from the first word that is not an option is the task, "-n" and "--" included, so
+    # that it can be typed without quotes.
+    ap.add_argument("task", nargs=argparse.REMAINDER,
+                    help="the task, quoted or not; on a terminal more lines may follow, up to Ctrl-D; "
+                         "read from stdin when absent")
     a = ap.parse_args(argv)
-    task = " ".join(a.task).strip()
-    if not task:
-        if sys.stdin.isatty():
-            sys.stderr.write("Task (finish with Ctrl-D on an empty line):\n")
-        task = sys.stdin.read().strip()
+    task = read_task(a.task)
     if not task:
         raise SystemExit("drover: no task")
+    SHOW_STATUS = sys.stderr.isatty()
+    status("routing")
 
     t0 = time.time()
     cfg = load_config()
@@ -828,6 +861,7 @@ def cmd_route(argv):
         raise SystemExit("drover: %s; name one with @place or set default in %s" % (d["why"], CONFIG))
     p = by_name(places, d["place"])
     name, path = (p.name, p.path) if p else (os.path.basename(d["place"]), d["place"])
+    status()
     sys.stderr.write("→ %s  [%s: %s]  %.1fs\n" % (name, d["how"], d["why"], elapsed))
     for h in d["hints"]:
         sys.stderr.write("  %s\n" % h)
@@ -837,12 +871,14 @@ def cmd_route(argv):
         print(path)
         return
     body = re.sub(r"^\s*@[^\s,:]+[\s,:]*", "", task) if d["how"] == "explicit" and not a.dir else task
+    status("opening a tab in herdr")
     try:
         r = launch(name, path, d["title"], body, cfg, focus=a.focus)
     except HerdrError as e:
         raise SystemExit("drover: herdr: %s" % e)
     entry.update(r)
     log(entry)
+    status()
     sys.stderr.write("  %s · tab %s · pane %s · %s\n" % (
         r["workspace"], r["tab"], r["pane"], (r["agent"] + " started") if r["agent"] else "no agent detected in 20 s"))
 
@@ -923,3 +959,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         sys.exit(130)
+    finally:
+        status()  # an error message would run on from a status line left on the terminal

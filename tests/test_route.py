@@ -1,8 +1,10 @@
 """Tests of drover's rules, on a tree of made-up places. Run: python3 -m unittest discover -s tests"""
 
 import importlib.machinery
+import io
 import os
 import shutil
+import sys
 import tempfile
 import types
 import unittest
@@ -135,6 +137,33 @@ class Summary(unittest.TestCase):
     def test_title_and_paragraph(self):
         self.assertEqual(drover.summarize("# omni\n\nA voice page.\nOn demand.\n\n## More\n\nx"),
                          "omni: A voice page. On demand.")
+
+
+class Input(io.StringIO):
+    def __init__(self, text, tty):
+        io.StringIO.__init__(self, text)
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+
+class ReadTask(unittest.TestCase):
+    def read(self, words, text, tty):
+        err, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            return drover.read_task(words, Input(text, tty))
+        finally:
+            sys.stderr = err
+
+    def test_words_then_lines_up_to_ctrl_d_on_a_terminal(self):
+        self.assertEqual(self.read(["fix", "the", "camera"], "it drops frames\n\n", True),
+                         "fix the camera\nit drops frames")
+        self.assertEqual(self.read(["fix", "it"], "", True), "fix it")
+
+    def test_words_alone_from_a_pipe(self):
+        self.assertEqual(self.read(["--", "fix", "-n"], "not read\n", False), "fix -n")
+        self.assertEqual(self.read([], "piped task\n", False), "piped task")
 
 
 if __name__ == "__main__":
