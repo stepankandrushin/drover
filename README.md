@@ -63,7 +63,7 @@ Requirements: Python 3.9 or later, and herdr 0.9 or later with its server runnin
 part (`drover -n`, `drover eval`) works without herdr.
 
 ```sh
-git clone <this repo> ~/src/drover
+git clone https://github.com/stepankandrushin/drover ~/src/drover
 ln -s ~/src/drover/drover ~/.local/bin/drover
 mkdir -p ~/.config/drover && cp ~/src/drover/config.example.ini ~/.config/drover/config.ini
 $EDITOR ~/.config/drover/config.ini      # roots, the agent command, the model endpoint
@@ -153,3 +153,7 @@ cache is `~/.cache/drover/history.json`.
 ```sh
 python3 -m unittest discover -s tests
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).
