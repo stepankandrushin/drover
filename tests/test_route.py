@@ -4,6 +4,7 @@ import importlib.machinery
 import io
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -173,6 +174,21 @@ class ReadTask(unittest.TestCase):
     def test_words_alone_from_a_pipe(self):
         self.assertEqual(self.read(["--", "fix", "-n"], Pipe("not read\n")), "fix -n")
         self.assertEqual(self.read([], Pipe("piped task\n")), "piped task")
+
+
+class RunHere(unittest.TestCase):
+    def test_the_shell_function_cds_and_runs_the_line(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        place, out = os.path.join(root, "it's a place"), os.path.join(root, "run")
+        os.mkdir(place)
+        os.environ["DROVER_RUN_FILE"] = out
+        try:
+            drover.run_here(place, "pwd -P")
+        finally:
+            del os.environ["DROVER_RUN_FILE"]
+        r = subprocess.run(["sh", "-c", 'cd /; eval "$(cat "$1")"', "sh", out], capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), os.path.realpath(place))
 
 
 if __name__ == "__main__":
