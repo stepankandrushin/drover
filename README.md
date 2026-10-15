@@ -3,7 +3,8 @@
 One command to hand a task to a coding agent in the project it belongs to.
 
 ```sh
-drover "the gate camera stopped recording since yesterday"
+drover the gate camera stopped recording since yesterday
+  more lines, or Ctrl-D on an empty line to route it
 → frigate  [model: 127.0.0.1:8080]  1.3s
   similar past tasks ran in: infra (40%), frigate (22%), media (21%), voice (9%)
   w43 · tab w43:t5 · pane w43:p9 · claude started
@@ -72,8 +73,8 @@ drover places                            # what drover found, and what the model
 ## Use
 
 ```sh
-drover "task text"           # route, open a herdr tab, start the agent
-drover                       # read the task from stdin: paste it, then Ctrl-D
+drover task text             # route, open a herdr tab, start the agent: more lines, then Ctrl-D
+drover                       # type or paste the task below, then Ctrl-D
 drover -n "task text"        # dry run: print the place and why, start nothing
 drover -f "task text"        # also switch to the new tab
 drover @infra "task text"    # skip routing
@@ -83,6 +84,17 @@ drover places                # list the places and their descriptions
 drover eval                  # replay your history through the rules
 drover eval --model --since 2026-10-01 --wrong
 ```
+
+On a terminal the words after `drover` are the task's first line, with or without quotes, and drover
+then reads more lines until Ctrl-D on an empty line: a one-line task is Enter, then Ctrl-D. Every
+word from the first one that is not an option belongs to the task, `-n` and `--` too. The shell
+still reads that first line, though, so one with `' ( ) ; & | < > # * ? $ !` in it goes in quotes or
+below a bare `drover`, and so does a paste of many lines: pasted after `drover ` on the command
+line, its other lines would run as shell commands. From a pipe or a script, the words alone are the
+task, and with none it is read from stdin.
+
+From Ctrl-D until the agent is up, one line on the terminal says what drover is doing (routing,
+asking the model at an endpoint, opening the tab, waiting for the agent), and the result replaces it.
 
 The task is written to `~/.local/state/drover/tasks/<time>-<title>.md`, and the agent starts with
 `{command} "$(cat <that file>)"` typed into the new pane's shell. Because the line goes through
