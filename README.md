@@ -7,15 +7,16 @@ drover the gate camera stopped recording since yesterday
   more lines, or Ctrl-D to route it
 → frigate  [model: 127.0.0.1:8080]  1.3s
   similar past tasks ran in: infra (40%), frigate (22%), media (21%), voice (9%)
-  w43 · tab w43:t5 · pane w43:p9 · claude started
+~/code/frigate $ claude "$(cat ~/.local/state/drover/tasks/…-gate-camera-stopped-recording.md)"
 ```
 
 When you work across dozens of repositories, every task starts with the same small decision:
 which directory do I open the agent in? drover makes that decision and hands off. It finds the
-project, opens a new tab in that project's [herdr](https://herdr.dev) workspace, or creates the
-workspace if there isn't one, and starts your agent there with the task as its first prompt. The
-agent never sees the routing. It starts in the right place with a clean context and spends no
-tokens working out where it should be.
+project, changes to its directory in the terminal you typed in, and starts your agent there with
+the task as its first prompt. With `-t` it starts the agent in a new tab of that project's
+[herdr](https://herdr.dev) workspace instead, creating the workspace if there isn't one, and your
+terminal stays free for the next task. The agent never sees the routing. It starts in the right
+place with a clean context and spends no tokens working out where it should be.
 
 drover is a single Python file with no dependencies. Plain rules do most of the routing, and a
 language model is asked only when the rules can't decide. Any OpenAI-compatible endpoint works,
@@ -59,8 +60,7 @@ before that.
 
 ## Install
 
-Requirements: Python 3.9 or later, and herdr 0.9 or later with its server running. The routing
-part (`drover -n`, `drover eval`) works without herdr.
+Requirements: Python 3.9 or later. `-t` also needs herdr 0.9 or later with its server running.
 
 ```sh
 git clone https://github.com/stepankandrushin/drover ~/src/drover
@@ -70,13 +70,32 @@ $EDITOR ~/.config/drover/config.ini      # roots, the agent command, the model e
 drover places                            # what drover found, and what the model will be told
 ```
 
+A program cannot change the directory of the shell that started it, so drover leaves the line
+`cd <place> && <agent>` in a file and a shell function runs it once drover exits. Put this in
+`~/.zshrc` or `~/.bashrc`:
+
+```sh
+drover() {
+  local f rc line
+  f=$(mktemp) || return
+  DROVER_RUN_FILE=$f command drover "$@"
+  rc=$?
+  line=$(cat "$f"); rm -f "$f"
+  if [ -n "$line" ]; then eval "$line"; else return $rc; fi
+}
+```
+
+Without the function, drover starts the agent in the place's directory in a shell of its own, and
+when the agent exits you are back where you were.
+
 ## Use
 
 ```sh
-drover task text             # route, open a herdr tab, start the agent: more lines, then Ctrl-D
+drover task text             # route, cd there, start the agent here: more lines, then Ctrl-D
 drover                       # type or paste the task below, then Ctrl-D
+drover -t "task text"        # start the agent in a new herdr tab instead
+drover -f "task text"        # -t, and switch to the new tab
 drover -n "task text"        # dry run: print the place and why, start nothing
-drover -f "task text"        # also switch to the new tab
 drover @infra "task text"    # skip routing
 drover -C ~/some/dir "..."   # any directory, even one outside the places
 drover --no-model "..."      # rules and history only
@@ -93,19 +112,19 @@ task, `-n` and `--` too. The shell still reads that first line, though, so one w
 `' ( ) ; & | < > # * ? $ !` in it goes in quotes or below a bare `drover`, and so does a paste of
 many lines: pasted after `drover ` on the command line, its other lines would run as shell
 commands. From a pipe or a script, the words alone are the task, and with none it is read from
-stdin.
+stdin. There is no terminal there for the agent, so it starts in a herdr tab, as with `-t`.
 
-From Ctrl-D until the agent is up, one line on the terminal says what drover is doing (routing,
-asking the model at an endpoint, opening the tab, waiting for the agent), and the result replaces it.
+From Ctrl-D on, one line on the terminal says what drover is doing (routing, asking the model at
+an endpoint, and with `-t` opening the tab and waiting for the agent), and the result replaces it.
 
 The task is written to `~/.local/state/drover/tasks/<time>-<title>.md`, and the agent starts with
-`{command} "$(cat <that file>)"` typed into the new pane's shell. Because the line goes through
-your interactive shell, an alias works as the command (for example `c` for
-`claude --dangerously-skip-permissions`). Every decision is appended to
+`{command} "$(cat <that file>)"`, run by your shell after the `cd`, or with `-t` typed into the new
+pane's shell. Because the line goes through your interactive shell, an alias works as the command
+(for example `c` for `claude --dangerously-skip-permissions`). Every decision is appended to
 `~/.local/state/drover/log.jsonl`.
 
-A new tab goes into the first workspace whose label is the place's name, or that has a pane in
-the place's directory. With no such workspace, drover creates one named after the place.
+With `-t`, the new tab goes into the first workspace whose label is the place's name, or that has
+a pane in the place's directory. With no such workspace, drover creates one named after the place.
 Existing tabs and agents are left alone, so every task starts fresh.
 
 ## Configuration
@@ -119,8 +138,8 @@ Existing tabs and agents are left alone, so every task starts fresh.
 | drover | places | extra single directories that are places |
 | drover | ignore | glob patterns of directory names to skip |
 | drover | default | the place used when nothing decides |
-| drover | command | the agent command typed into the pane: `claude`, an alias, `codex` |
-| drover | launch | the line typed, `{command} "$(cat {file})"` by default |
+| drover | command | the agent command: `claude`, an alias, `codex` |
+| drover | launch | the line your shell runs, `{command} "$(cat {file})"` by default |
 | drover | history | where Claude Code keeps its transcripts |
 | drover | history_min_score, history_min_share | how strong and how one-sided the similar past tasks must be to count as a signal |
 | model | endpoints | OpenAI-compatible base URLs, tried in order |

@@ -1,6 +1,7 @@
 # drover
 
-Routes a task to the project it belongs to and starts a coding agent there in a new herdr tab:
+Routes a task to the project it belongs to and starts a coding agent there, in the calling
+terminal or with `-t` in a new herdr tab:
 rules first (explicit, paths, names, keywords, Claude Code history), a local LLM only when they do
 not agree. One file, `drover`, Python 3.9+ standard library only. README.md is the user's manual;
 this file is how to work on it.
@@ -22,6 +23,10 @@ this file is how to work on it.
   The labels are where the owner happened to run a session, so a "miss" is often drover being
   right: read `--wrong` before tuning to the numbers. The figures each change produced go in
   its history/ entry.
+- **The calling shell changes directory through the shell function in README.md**: drover writes
+  `cd <place> && <launch line>` to the file named in `$DROVER_RUN_FILE` and the function evals it.
+  Without that variable, drover execs `$SHELL -ic <line>` in the place. Without a terminal on
+  stdin it opens a tab as with `-t`, so that a script or an agent calling drover does not hang.
 - **herdr is driven through its CLI**, which prints JSON (`{"result": …}`); `herdr --skill` and
   `herdr <group>` print the current syntax. drover waits for the new pane's shell to draw its prompt
   (`pane wait-output --regex \S`) before typing, and reads the agent's kind from
@@ -29,7 +34,7 @@ this file is how to work on it.
 - Tests: `python3 -m unittest discover -s tests`. They build a tree of made-up places in a temp
   directory and never touch herdr or a model.
 - A test that launches into herdr for real: point `DROVER_CONFIG` at a copy of the config with
-  `command = echo TEST`, run with `-C <place>`, read the pane, and close the workspace or tabs
+  `command = echo TEST`, run with `-t -C <place>`, read the pane, and close the workspace or tabs
   you made (`herdr workspace close <id>`).
 
 ## Docs

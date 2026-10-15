@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""drover: send a task to the project it belongs to and start a coding agent there in herdr.
+"""drover: send a task to the project it belongs to and start a coding agent there.
 
-    drover the gate camera stopped recording       route, open a herdr tab, start the agent; on a terminal
-                                                   more lines may follow, then Ctrl-D (quotes are optional)
+    drover the gate camera stopped recording       route, cd there and start the agent in this terminal; on a
+                                                   terminal more lines may follow, then Ctrl-D (quotes optional)
     drover                                         read the task from stdin (paste, then Ctrl-D)
+    drover -t "..."                                start it in a new herdr tab instead
     drover -n "..."                                show where it would go and why; start nothing
     drover @infra "..."   drover -C ~/x "..."      skip routing
     drover places                                  list the places and what the model is told
@@ -753,14 +754,34 @@ def find_workspace(place_name, path):
     return None
 
 
-def launch(place_name, path, title, task, cfg, focus=False):
+def write_task(title, task):
     os.makedirs(os.path.join(STATE, "tasks"), exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
     slug = re.sub(r"[^\w]+", "-", title.lower()).strip("-")[:40] or "task"
     file = os.path.join(STATE, "tasks", "%s-%s.md" % (stamp, slug))
     with open(file, "w", encoding="utf-8") as f:
         f.write(task)
+    return file
 
+
+def run_here(path, line):
+    """Start the agent in this terminal. The shell function of the README names a file in
+    $DROVER_RUN_FILE and runs the line written there once drover exits, so that its shell stays in
+    the place afterwards. Without it, a shell started in the place runs the line, and when the agent
+    exits the terminal is back where it was."""
+    out = os.environ.get("DROVER_RUN_FILE")
+    if out:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("cd %s && %s\n" % (shlex.quote(path), line))
+        return
+    status()
+    drop_typeahead()
+    os.chdir(path)
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    os.execvp(shell, [shell, "-ic", line])  # interactive, so that an alias works as the command
+
+
+def launch(place_name, path, title, line, focus=False):
     ws = find_workspace(place_name, path)
     if ws:
         r = herdr("tab", "create", "--workspace", ws, "--cwd", path, "--label", title, "--no-focus")
@@ -774,7 +795,6 @@ def launch(place_name, path, title, task, cfg, focus=False):
         herdr("pane", "wait-output", pane, "--regex", r"\S", "--timeout", "15000")
     except HerdrError:
         pass
-    line = cfg.get("drover", "launch").format(command=cfg.get("drover", "command"), file=shlex.quote(file))
     herdr("pane", "run", pane, line)
     if focus:
         herdr("workspace", "focus", ws)
@@ -790,7 +810,7 @@ def launch(place_name, path, title, task, cfg, focus=False):
         except HerdrError:
             pass
         time.sleep(0.5)
-    return {"workspace": ws, "tab": tab, "pane": pane, "file": file, "agent": agent}
+    return {"workspace": ws, "tab": tab, "pane": pane, "agent": agent}
 
 
 # ---------------------------------------------------------------- commands
@@ -852,10 +872,12 @@ def log(entry):
 
 def cmd_route(argv):
     global SHOW_STATUS
-    ap = argparse.ArgumentParser(prog="drover", description="Route a task to its project and start an agent there in herdr.")
+    ap = argparse.ArgumentParser(prog="drover", description="Route a task to its project and start an agent there.")
     ap.add_argument("-n", "--dry-run", action="store_true", help="show where the task would go; start nothing")
     ap.add_argument("-C", "--dir", help="a place name or directory: skip routing")
-    ap.add_argument("-f", "--focus", action="store_true", help="switch to the new tab")
+    ap.add_argument("-t", "--tab", action="store_true",
+                    help="start the agent in a new herdr tab, not in this terminal (the default without a terminal)")
+    ap.add_argument("-f", "--focus", action="store_true", help="-t, and switch to the new tab")
     ap.add_argument("--no-model", action="store_true", help="rules only")
     ap.add_argument("--no-history", action="store_true", help="do not consult the Claude Code history")
     # Everything from the first word that is not an option is the task, "-n" and "--" included, so
@@ -895,9 +917,15 @@ def cmd_route(argv):
         print(path)
         return
     body = re.sub(r"^\s*@[^\s,:]+[\s,:]*", "", task) if d["how"] == "explicit" and not a.dir else task
+    entry["file"] = write_task(d["title"], body)
+    line = cfg.get("drover", "launch").format(command=cfg.get("drover", "command"), file=shlex.quote(entry["file"]))
+    if not (a.tab or a.focus) and sys.stdin.isatty():
+        entry["where"] = "here"
+        log(entry)
+        return run_here(path, line)
     status("opening a tab in herdr")
     try:
-        r = launch(name, path, d["title"], body, cfg, focus=a.focus)
+        r = launch(name, path, d["title"], line, focus=a.focus)
     except HerdrError as e:
         raise SystemExit("drover: herdr: %s" % e)
     entry.update(r)
