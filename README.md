@@ -4,7 +4,7 @@ One command to hand a task to a coding agent in the project it belongs to.
 
 ```sh
 drover the gate camera stopped recording since yesterday
-  more lines, or Ctrl-D to route it
+  more lines, or two empty lines or Ctrl-D to route it
 → frigate  [model: 127.0.0.1:8080]  1.3s
   similar past tasks ran in: infra (40%), frigate (22%), media (21%), voice (9%)
 ~/code/frigate $ claude "$(cat ~/.local/state/drover/tasks/…-gate-camera-stopped-recording.md)"
@@ -91,8 +91,8 @@ when the agent exits you are back where you were.
 ## Use
 
 ```sh
-drover task text             # route, cd there, start the agent here: more lines, then Ctrl-D
-drover                       # type or paste the task below, then Ctrl-D
+drover task text             # route, cd there, start the agent here: more lines, then Enter x3
+drover                       # type or paste the task below, then Enter x3
 drover -t "task text"        # start the agent in a new herdr tab instead
 drover -f "task text"        # -t, and switch to the new tab
 drover -n "task text"        # dry run: print the place and why, start nothing
@@ -105,16 +105,19 @@ drover eval --model --since 2026-10-01 --wrong
 ```
 
 On a terminal the words after `drover` are the task's first line, with or without quotes, and
-drover then reads more lines until Ctrl-D, at the end of the text or on a line of its own: a
-one-line task is Enter, then Ctrl-D. Keys pressed while drover works are thrown away, so a second
-Ctrl-D doesn't reach the shell. Every word from the first one that is not an option belongs to the
+drover then reads more lines until two empty lines in a row, that is Enter three times at the end
+of the text: a one-line task is `drover task text` and three Enters. Ctrl-D ends it too, at the end
+of the text or on a line of its own. Empty lines in a paste don't end it, because the paste's next
+line is already waiting behind them; drover ends the task at two empty lines only when nothing
+follows them for 0.2 s. Keys pressed while drover works are thrown away, so one Enter or Ctrl-D too
+many doesn't reach the shell. Every word from the first one that is not an option belongs to the
 task, `-n` and `--` too. The shell still reads that first line, though, so one with
 `' ( ) ; & | < > # * ? $ !` in it goes in quotes or below a bare `drover`, and so does a paste of
 many lines: pasted after `drover ` on the command line, its other lines would run as shell
 commands. From a pipe or a script, the words alone are the task, and with none it is read from
 stdin. There is no terminal there for the agent, so it starts in a herdr tab, as with `-t`.
 
-From Ctrl-D on, one line on the terminal says what drover is doing (routing, asking the model at
+From the end of the task on, one line on the terminal says what drover is doing (routing, asking the model at
 an endpoint, and with `-t` opening the tab and waiting for the agent), and the result replaces it.
 
 The task is written to `~/.local/state/drover/tasks/<time>-<title>.md`, and the agent starts with

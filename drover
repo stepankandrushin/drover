@@ -2,8 +2,9 @@
 """drover: send a task to the project it belongs to and start a coding agent there.
 
     drover the gate camera stopped recording       route, cd there and start the agent in this terminal; on a
-                                                   terminal more lines may follow, then Ctrl-D (quotes optional)
-    drover                                         read the task from stdin (paste, then Ctrl-D)
+                                                   terminal more lines may follow, then two empty lines or
+                                                   Ctrl-D (quotes optional)
+    drover                                         read the task from stdin (paste, then two empty lines or Ctrl-D)
     drover -t "..."                                start it in a new herdr tab instead
     drover -n "..."                                show where it would go and why; start nothing
     drover @infra "..."   drover -C ~/x "..."      skip routing
@@ -31,6 +32,7 @@ import json
 import math
 import os
 import re
+import select
 import shlex
 import subprocess
 import sys
@@ -827,33 +829,46 @@ def status(msg=""):
 
 def read_task(words, stdin=None):
     """The words after the options and, on a terminal, the lines typed or pasted below them up to
-    Ctrl-D, so that a task needs no quotes and may run over many lines."""
+    two empty lines or Ctrl-D, so that a task needs no quotes and may run over many lines."""
     stdin = stdin or sys.stdin
     first = " ".join(words[1:] if words[:1] == ["--"] else words).strip()
     if not stdin.isatty():
         return first or stdin.read().strip()
-    sys.stderr.write("  more lines, or Ctrl-D to route it\n" if first else "Task (finish with Ctrl-D):\n")
+    sys.stderr.write("  more lines, or two empty lines or Ctrl-D to route it\n" if first
+                     else "Task (finish with two empty lines or Ctrl-D):\n")
     rest = read_tty(stdin.fileno())
     if rest and not rest.endswith("\n"):  # Ctrl-D after the text: the cursor is still on its line
         sys.stderr.write("\n")
+    elif ended_by_empty_lines(rest) and sys.stderr.isatty():  # the status goes where they were
+        sys.stderr.write("\033[2A")
     return (first + "\n" + rest).strip()
 
 
 def read_tty(fd):
-    """Lines from a terminal up to the first Ctrl-D. A terminal hands over one line per read, and
-    Ctrl-D hands over the line so far without its newline, or nothing on an empty line, where a
-    plain read() would go on until a Ctrl-D on an empty line."""
+    """Lines from a terminal up to two empty lines in a row or the first Ctrl-D. A terminal hands
+    over one line per read, and Ctrl-D hands over the line so far without its newline, or nothing
+    on an empty line, where a plain read() would go on until a Ctrl-D on an empty line. Empty lines
+    with more text already waiting behind them come from a paste, and the task goes on."""
     data = b""
     while True:
         chunk = os.read(fd, 65536)
         data += chunk
         if not chunk.endswith(b"\n"):
             return data.decode("utf-8", "replace")
+        if ended_by_empty_lines(data) and not select.select([fd], [], [], 0.2)[0]:
+            return data.decode("utf-8", "replace")
+
+
+def ended_by_empty_lines(text):
+    """Whether text read from a terminal ends in two empty lines. It starts on a line of its own,
+    so two newlines at its very start are two empty lines too."""
+    nl = "\n" if isinstance(text, str) else b"\n"
+    return (nl + text).endswith(nl * 3)
 
 
 def drop_typeahead():
-    """Throw away what was typed while drover worked, such as Ctrl-D pressed once more, so that the
-    shell does not read it next."""
+    """Throw away what was typed while drover worked, such as Enter or Ctrl-D pressed once more, so
+    that the shell does not read it next."""
     try:
         import termios
         termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
@@ -883,8 +898,8 @@ def cmd_route(argv):
     # Everything from the first word that is not an option is the task, "-n" and "--" included, so
     # that it can be typed without quotes.
     ap.add_argument("task", nargs=argparse.REMAINDER,
-                    help="the task, quoted or not; on a terminal more lines may follow, up to Ctrl-D; "
-                         "read from stdin when absent")
+                    help="the task, quoted or not; on a terminal more lines may follow, up to two empty "
+                         "lines or Ctrl-D; read from stdin when absent")
     a = ap.parse_args(argv)
     task = read_task(a.task)
     if sys.stdin.isatty():
