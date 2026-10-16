@@ -25,6 +25,7 @@ Python 3.9+ standard library only. Configuration: ~/.config/drover/config.ini (s
 
 import argparse
 import atexit
+import codecs
 import configparser
 import datetime
 import glob
@@ -37,6 +38,7 @@ import shlex
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
@@ -836,34 +838,265 @@ def read_task(words, stdin=None):
         return first or stdin.read().strip()
     sys.stderr.write("  more lines, or two empty lines or Ctrl-D to route it\n" if first
                      else "Task (finish with two empty lines or Ctrl-D):\n")
-    rest = read_tty(stdin.fileno())
-    if rest and not rest.endswith("\n"):  # Ctrl-D after the text: the cursor is still on its line
-        sys.stderr.write("\n")
-    elif ended_by_empty_lines(rest) and sys.stderr.isatty():  # the status goes where they were
-        sys.stderr.write("\033[2A")
-    return (first + "\n" + rest).strip()
+    sys.stderr.flush()
+    return (first + "\n" + read_tty(stdin.fileno())).strip()
 
 
 def read_tty(fd):
-    """Lines from a terminal up to two empty lines in a row or the first Ctrl-D. A terminal hands
-    over one line per read, and Ctrl-D hands over the line so far without its newline, or nothing
-    on an empty line, where a plain read() would go on until a Ctrl-D on an empty line. Empty lines
-    with more text already waiting behind them come from a paste, and the task goes on."""
-    data = b""
-    while True:
-        chunk = os.read(fd, 65536)
-        data += chunk
-        if not chunk.endswith(b"\n"):
-            return data.decode("utf-8", "replace")
-        if ended_by_empty_lines(data) and not select.select([fd], [], [], 0.2)[0]:
-            return data.decode("utf-8", "replace")
+    """Lines typed on a terminal, edited as they are typed, up to two empty lines at the end or
+    Ctrl-D. The terminal's own line mode knows Backspace and little else, and hands the arrows over
+    as escape codes, so drover switches it off for the time and draws the text itself."""
+    import termios
+    old = termios.tcgetattr(fd)
+    raw = termios.tcgetattr(fd)
+    raw[0] &= ~(termios.ICRNL | termios.INLCR)  # Enter comes as \r, and a pasted \r\n as one break
+    raw[3] &= ~(termios.ICANON | termios.ECHO | termios.ISIG | termios.IEXTEN)
+    raw[6][termios.VMIN], raw[6][termios.VTIME] = 1, 0
+    termios.tcsetattr(fd, termios.TCSANOW, raw)  # TCSANOW: what was typed already stays
+    ed = Editor(fd)
+    try:
+        ed.write("\033[?2004h")  # bracketed paste: a paste comes marked, empty lines and all
+        return ed.run()
+    finally:
+        ed.write("\033[?2004l")
+        termios.tcsetattr(fd, termios.TCSANOW, old)
 
 
-def ended_by_empty_lines(text):
-    """Whether text read from a terminal ends in two empty lines. It starts on a line of its own,
-    so two newlines at its very start are two empty lines too."""
-    nl = "\n" if isinstance(text, str) else b"\n"
-    return (nl + text).endswith(nl * 3)
+EDITOR_KEYS = {
+    "\033[D": "left", "\033OD": "left", "\002": "left", "\033[C": "right", "\033OC": "right", "\006": "right",
+    "\033[A": "up", "\033OA": "up", "\020": "up", "\033[B": "down", "\033OB": "down", "\016": "down",
+    "\033[H": "home", "\033OH": "home", "\033[1~": "home", "\033[7~": "home", "\001": "home",
+    "\033[F": "end", "\033OF": "end", "\033[4~": "end", "\033[8~": "end", "\005": "end",
+    "\033[1;5D": "word-left", "\033[1;3D": "word-left", "\033b": "word-left",
+    "\033[1;5C": "word-right", "\033[1;3C": "word-right", "\033f": "word-right",
+    "\177": "backspace", "\010": "backspace", "\033[3~": "delete", "\027": "rubout-word",
+    "\033\177": "rubout-word", "\033\010": "rubout-word", "\025": "kill-start", "\013": "kill-end",
+    "\r": "enter", "\n": "enter", "\004": "done", "\003": "interrupt", "\033[200~": "paste",
+    "\000": "done"}  # a Ctrl-D typed before the terminal left its line mode is read as NUL
+EDITOR_MOVES = {"left", "right", "up", "down", "home", "end", "word-left", "word-right"}
+
+
+def text_width(s):
+    """Columns that s takes on a terminal: two for a wide character, none for a combining one."""
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in "WF" else 1
+               for c in s.replace("\t", "    "))
+
+
+class Editor(object):
+    """A line editor for the lines of a task: the text is lines[], the cursor lines[row][col], and
+    each redraw starts from the screen row where line k began, which heights[] (screen rows per line
+    as drawn) and at (the line and the row within it of the terminal's cursor) say how to reach."""
+
+    def __init__(self, fd):
+        self.fd, self.out, self.pending = fd, fd, ""
+        self.decode = codecs.getincrementaldecoder("utf-8")("replace").decode
+        self.lines, self.row, self.col = [""], 0, 0
+        self.heights, self.at = [1], (0, 0)
+
+    def write(self, s):
+        data = s.encode("utf-8")
+        while data:
+            try:
+                data = data[os.write(self.out, data):]
+            except OSError:
+                if self.out == 2:
+                    return
+                self.out = 2  # a terminal open for reading only: draw on stderr
+
+    def read(self, timeout=None):
+        """More input into pending; False when nothing came within the timeout or the terminal is gone."""
+        if timeout is not None and not select.select([self.fd], [], [], timeout)[0]:
+            return False
+        chunk = os.read(self.fd, 65536)
+        self.pending += self.decode(chunk)
+        return bool(chunk)
+
+    def run(self):
+        dirty = 0
+        while True:
+            if not self.pending and not self.read():
+                return self.finish()
+            key, text = self.next_key()
+            if key is None:  # an escape sequence cut short, or Esc pressed alone
+                if not self.read(0.05):
+                    self.pending = self.pending[1:]
+                continue
+            dirty = min(dirty, self.row)
+            if key == "done":
+                return self.finish()
+            if key == "interrupt":
+                self.finish()
+                raise KeyboardInterrupt
+            if key == "enter":  # a new line at the end of the text, wherever the cursor is
+                self.row, self.col = len(self.lines) - 1, len(self.lines[-1])
+                # Two empty lines end the task, unless more is waiting behind them: then they are
+                # part of a paste from a terminal that does not mark pastes.
+                if self.lines[-2:] == ["", ""] and not self.pending and not self.read(0.2):
+                    return self.finish()
+            if key == "paste":
+                while "\033[201~" not in self.pending and self.read():
+                    pass
+                text, _, self.pending = self.pending.partition("\033[201~")
+                key = "insert"
+            before = self.row, self.col
+            self.edit(key, text)
+            if key in EDITOR_MOVES and self.below() >= self.size()[1]:
+                self.row, self.col = before  # it would leave the screen, which cannot scroll back
+            dirty = min(dirty, self.row)
+            if not self.pending:
+                self.render(dirty)
+                dirty = len(self.lines)
+
+    def next_key(self):
+        """The key at the head of pending and its text, taken off it; None when a sequence is cut short."""
+        s = self.pending
+        m = re.match(r"[^\000-\010\012-\037\177]+", s)  # text, Tab included
+        if m:
+            key, n = "insert", m.end()
+        elif s[0] != "\033":
+            key, n = EDITOR_KEYS.get(s[0], ""), 1
+        elif len(s) == 1:
+            return None, ""
+        elif s[1] in "[O":
+            m = re.match(r"\033[\[O][0-?]*[ -/]*([@-~])?", s)
+            if not m.group(1) and m.end() == len(s):
+                return None, ""
+            key, n = EDITOR_KEYS.get(m.group(), "") if m.group(1) else "", m.end()
+        else:
+            key, n = EDITOR_KEYS.get(s[:2], ""), 2
+        self.pending = s[n:]
+        return key, s[:n]
+
+    def edit(self, key, text):
+        line, col = self.lines[self.row], self.col
+        if key == "insert":
+            text = "".join(c for c in text.replace("\r\n", "\n").replace("\r", "\n") if c >= " " and c != "\177"
+                           or c in "\t\n")
+            parts = text.split("\n")
+            tail = line[col:]
+            parts[0] = line[:col] + parts[0]
+            parts[-1] += tail
+            self.lines[self.row:self.row + 1] = parts
+            self.row += len(parts) - 1
+            self.col = len(parts[-1]) - len(tail)
+        elif key == "enter":
+            self.lines.append("")
+            self.row, self.col = len(self.lines) - 1, 0
+        elif key == "left" and col == 0 and self.row > 0:
+            self.row -= 1
+            self.col = len(self.lines[self.row])
+        elif key == "left":
+            self.col = max(col - 1, 0)
+        elif key == "right" and col == len(line) and self.row < len(self.lines) - 1:
+            self.row, self.col = self.row + 1, 0
+        elif key == "right":
+            self.col = min(col + 1, len(line))
+        elif key in ("up", "down"):
+            self.vertical(-1 if key == "up" else 1)
+        elif key == "home":
+            self.col = 0
+        elif key == "end":
+            self.col = len(line)
+        elif key in ("word-left", "rubout-word"):
+            while col > 0 and line[col - 1].isspace():
+                col -= 1
+            while col > 0 and not line[col - 1].isspace():
+                col -= 1
+            if key == "rubout-word":
+                self.lines[self.row] = line[:col] + line[self.col:]
+            self.col = col
+        elif key == "word-right":
+            while col < len(line) and line[col].isspace():
+                col += 1
+            while col < len(line) and not line[col].isspace():
+                col += 1
+            self.col = col
+        elif key == "backspace" and col == 0 and self.row > 0:
+            self.row -= 1
+            self.col = len(self.lines[self.row])
+            self.lines[self.row:self.row + 2] = [self.lines[self.row] + line]
+        elif key == "backspace":
+            self.lines[self.row] = line[:max(col - 1, 0)] + line[col:]
+            self.col = max(col - 1, 0)
+        elif key == "delete" and col == len(line) and self.row < len(self.lines) - 1:
+            self.lines[self.row:self.row + 2] = [line + self.lines[self.row + 1]]
+        elif key == "delete":
+            self.lines[self.row] = line[:col] + line[col + 1:]
+        elif key == "kill-start":
+            self.lines[self.row], self.col = line[col:], 0
+        elif key == "kill-end":
+            self.lines[self.row] = line[:col]
+
+    def vertical(self, step):
+        """Up or down one screen row, into the line above or below at the edges of a wrapped line."""
+        w = self.width()
+        r, x = divmod(text_width(self.lines[self.row][:self.col]), w)
+        if 0 <= r + step < self.rows(self.lines[self.row], w):
+            self.col = self.index_at(self.lines[self.row], (r + step) * w + x)
+        elif 0 <= self.row + step < len(self.lines):
+            self.row += step
+            r = self.rows(self.lines[self.row], w) - 1 if step < 0 else 0
+            self.col = self.index_at(self.lines[self.row], r * w + x)
+
+    def size(self):
+        try:
+            size = os.get_terminal_size(self.out)
+            return size.columns or 80, size.lines or 24
+        except OSError:
+            return 80, 24
+
+    def width(self):
+        return self.size()[0]
+
+    def below(self):
+        """Screen rows from the cursor's down to the last of the text."""
+        w = self.width()
+        r = text_width(self.lines[self.row][:self.col]) // w
+        return sum(self.rows(l, w) for l in self.lines[self.row:]) - 1 - r
+
+    @staticmethod
+    def rows(line, w):
+        return max(1, -(-text_width(line) // w))
+
+    @staticmethod
+    def index_at(line, columns):
+        """The furthest place in line that lies within that many columns of its start."""
+        i = 0
+        while i < len(line) and text_width(line[:i + 1]) <= columns:
+            i += 1
+        return i
+
+    def back_to(self, k):
+        """Escapes that take the terminal's cursor to where line k began, and clear from there down."""
+        up = sum(self.heights[k:self.at[0]]) + self.at[1]
+        return ("\033[%dA" % up if up else "") + "\r\033[J"
+
+    def render(self, k):
+        """Redraw lines k and below and put the cursor in its place."""
+        k = min(k, self.at[0])
+        w, last = self.width(), len(self.lines) - 1
+        out = self.back_to(k) + "\r\n".join(l.replace("\t", "    ") for l in self.lines[k:])
+        self.heights = self.heights[:k] + [self.rows(l, w) for l in self.lines[k:]]
+        r, x = divmod(text_width(self.lines[self.row][:self.col]), w)
+        if r == self.heights[self.row]:  # at the end of a line that fills its last row
+            if self.row == last:
+                out += "\r\n"
+                self.heights[last] += 1
+            else:
+                r, x = r - 1, w - 1
+        up = sum(self.heights[self.row + 1:]) + self.heights[self.row] - 1 - r
+        self.write(out + ("\033[%dA" % up if up else "") + "\r" + ("\033[%dC" % x if x else ""))
+        self.at = (self.row, r)
+
+    def finish(self):
+        """Draw the text without the empty lines that ended it, leave the cursor on a line of its
+        own below for the status, and return the text."""
+        text = list(self.lines)
+        while text and not text[-1]:
+            text.pop()
+        k = min(self.at[0], len(text))
+        self.write(self.back_to(k) + "".join(l.replace("\t", "    ") + "\r\n" for l in text[k:]))
+        return "\n".join(text)
 
 
 def drop_typeahead():
