@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import termios
 import types
 import unittest
 
@@ -153,10 +154,16 @@ class ReadTask(unittest.TestCase):
         finally:
             sys.stderr = err
 
-    def typed(self, words, keys):
-        """read_task on a real terminal that the keys were typed into (\x04 is Ctrl-D)."""
+    def typed(self, words, keys, line_mode=False):
+        """read_task on a real terminal that the keys were typed into (\x04 is Ctrl-D): typed while
+        drover reads, or with line_mode before it starts, when the terminal still edits them."""
         master, slave = os.openpty()
         try:
+            if not line_mode:
+                mode = termios.tcgetattr(slave)
+                mode[0] &= ~termios.ICRNL
+                mode[3] &= ~(termios.ICANON | termios.ECHO | termios.ISIG)
+                termios.tcsetattr(slave, termios.TCSANOW, mode)
             os.write(master, keys)
             with os.fdopen(slave) as tty:
                 return self.read(words, tty)
@@ -178,6 +185,28 @@ class ReadTask(unittest.TestCase):
 
     def test_empty_lines_inside_a_paste_do_not(self):
         self.assertEqual(self.typed([], b"pasted\n\n\nand more\n\n\n"), "pasted\n\n\nand more")
+
+    def test_keys_edit_the_text(self):
+        self.assertEqual(self.typed([], b"fix the camra\033[D\033[De\n\n\n"), "fix the camera")
+        self.assertEqual(self.typed([], b"one\ntwo\033[A\001X\033[B\001\177\004"), "Xonetwo")
+        self.assertEqual(self.typed([], b"a b c\027\027x\033[D\033[3~y\001\033[Cz\013\004"), "az")
+        self.assertEqual(self.typed([], b"one two\033[D\033[D\033[D\025\004"), "two")
+        self.assertEqual(self.typed([], b"a\033[15~b\033[1;2Pc\033[\033[Cd\004"), "abcd")
+
+    def test_enter_starts_a_line_at_the_end_wherever_the_cursor_is(self):
+        self.assertEqual(self.typed([], b"fix it\033[D\033[D\n\n\n"), "fix it")
+        self.assertEqual(self.typed([], b"one\033[Dx\ntwo\004"), "onxe\ntwo")
+
+    def test_a_paste_goes_in_at_the_cursor(self):
+        self.assertEqual(self.typed([], b"ab\033[D\033[200~1\r\n\n2\033[201~\004"), "a1\n\n2b")
+
+    def test_typed_before_drover_reads(self):
+        self.assertEqual(self.typed(["fix", "it"], b"more\x04", line_mode=True), "fix it\nmore")
+        self.assertEqual(self.typed([], b"two\nlines\x04never read\n\x04", line_mode=True), "two\nlines")
+
+    def test_ctrl_c(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.typed([], b"half a task\003")
 
     def test_words_alone_from_a_pipe(self):
         self.assertEqual(self.read(["--", "fix", "-n"], Pipe("not read\n")), "fix -n")

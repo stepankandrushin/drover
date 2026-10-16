@@ -104,18 +104,23 @@ drover eval                  # replay your history through the rules
 drover eval --model --since 2026-10-01 --wrong
 ```
 
-On a terminal the words after `drover` are the task's first line, with or without quotes, and
-drover then reads more lines until two empty lines in a row, that is Enter three times at the end
-of the text: a one-line task is `drover task text` and three Enters. Ctrl-D ends it too, at the end
-of the text or on a line of its own. Empty lines in a paste don't end it, because the paste's next
-line is already waiting behind them; drover ends the task at two empty lines only when nothing
-follows them for 0.2 s. Keys pressed while drover works are thrown away, so one Enter or Ctrl-D too
-many doesn't reach the shell. Every word from the first one that is not an option belongs to the
-task, `-n` and `--` too. The shell still reads that first line, though, so one with
-`' ( ) ; & | < > # * ? $ !` in it goes in quotes or below a bare `drover`, and so does a paste of
-many lines: pasted after `drover ` on the command line, its other lines would run as shell
-commands. From a pipe or a script, the words alone are the task, and with none it is read from
-stdin. There is no terminal there for the agent, so it starts in a herdr tab, as with `-t`.
+On a terminal the words after `drover` are the task's first line, with or without quotes, and drover
+then reads more lines until two empty lines in a row, that is Enter three times at the end of the
+text: a one-line task is `drover task text` and three Enters. Ctrl-D ends it too, wherever the
+cursor is. The lines can be edited as in a shell: the arrows (Up and Down move through the lines
+above), Home and End, Backspace and Delete, Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K and Ctrl-W, and Ctrl or
+Alt with the arrows to move by words. Enter starts a new line at the end of the text, wherever the
+cursor is, so a word fixed further back doesn't stop three Enters from ending the task. A paste goes
+in at the cursor, and its empty lines don't end the task: the terminal marks the paste (bracketed
+paste), and in one that doesn't, the paste's next line is already waiting behind them, so drover
+ends the task at two empty lines only when nothing follows them for 0.2 s. Keys pressed while drover
+works are thrown away, so one Enter or Ctrl-D too many doesn't reach the shell. Every word from the
+first one that is not an option belongs to the task, `-n` and `--` too. The shell still reads that
+first line, though, so one with `' ( ) ; & | < > # * ? $ !` in it goes in quotes or below a bare
+`drover`, and so does a paste of many lines: pasted after `drover ` on the command line, its other
+lines would run as shell commands. From a pipe or a script, the words alone are the task, and with
+none it is read from stdin. There is no terminal there for the agent, so it starts in a herdr tab,
+as with `-t`.
 
 From the end of the task on, one line on the terminal says what drover is doing (routing, asking the model at
 an endpoint, and with `-t` opening the tab and waiting for the agent), and the result replaces it.
