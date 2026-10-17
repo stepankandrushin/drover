@@ -43,6 +43,11 @@ config.
    - **history**: the first prompts of your past Claude Code sessions are indexed with BM25,
      with the directory each one ran in. If the ten most similar ones mostly ran in one place,
      and the match is strong enough, that place is the signal.
+   - **form**: a short task (up to three lines, the first of up to eight words) has a shape: its
+     first word, its stopwords, and `_` for each run of other words, so `fix colour to color`
+     is `fix _ to _`. If there are at least three past tasks of that shape and three in four of
+     them ran in one place, that place is the signal. It catches the shorthand commands you give
+     in one place, which share no words for the history to match.
 
    **If every signal present names the same place, that place wins.** If they disagree, or there
    are none, the rules aren't enough and the model decides.
@@ -150,6 +155,7 @@ Existing tabs and agents are left alone, so every task starts fresh.
 | drover | launch | the line your shell runs, `{command} "$(cat {file})"` by default |
 | drover | history | where Claude Code keeps its transcripts |
 | drover | history_min_score, history_min_share | how strong and how one-sided the similar past tasks must be to count as a signal |
+| drover | form_min_tasks, form_min_share | how many past tasks of the same shape there must be, and how one-sided, to count as a signal |
 | model | endpoints | OpenAI-compatible base URLs, tried in order |
 | model | model, api_key, timeout | as the endpoint wants them |
 | model | extra | JSON merged into the request body, e.g. `{"chat_template_kwargs": {"enable_thinking": false}}` for Qwen3 on llama.cpp or vLLM |

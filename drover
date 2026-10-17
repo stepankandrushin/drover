@@ -17,6 +17,7 @@ Rules decide first and a local model is asked only when they cannot:
   name       a place named in the task
   keyword    the [keywords] of the config
   history    the places where your most similar past Claude Code sessions ran
+  form       where your past short tasks of the same shape ran ("fix _ to _")
   model      an OpenAI-compatible model, given every place's one-line description
   default    the configured default place
 
@@ -60,6 +61,8 @@ launch = {command} "$(cat {file})"
 history = ~/.claude/projects
 history_min_score = 12
 history_min_share = 0.6
+form_min_tasks = 3
+form_min_share = 0.75
 
 [model]
 endpoints =
@@ -287,6 +290,22 @@ def title_of(task, words=6):
     return (t[:48].rsplit(" ", 1)[0] if len(t) > 48 else t) or "task"
 
 
+def form_of(task, words=8, lines=3):
+    """The shape of a short task: its first word, its stopwords, and _ for each run of other words,
+    so that "fix colour to color" and "fix Jon Smit to John Smith" are both "fix _ to _". None for
+    a longer task, whose shape says nothing."""
+    rows = [l for l in task.lower().splitlines() if l.strip()]
+    w = rows[0].split() if rows else []
+    if not w or len(w) > words or len(rows) > lines or not re.match(r"[^\W\d_]+$", w[0]):
+        return None
+    out = w[:1]
+    for x in w[1:]:
+        x = x if x in STOPWORDS else "_"
+        if x != "_" or out[-1] != "_":
+            out.append(x)
+    return " ".join(out) if "_" in out else None
+
+
 # ---------------------------------------------------------------- BM25 over past tasks
 
 class BM25(object):
@@ -321,11 +340,12 @@ class BM25(object):
 
 
 class History(object):
-    """Past tasks with the place each ran in: BM25 over them, and how often a place's name in a task
-    meant that place."""
+    """Past tasks with the place each ran in: BM25 over them, where the short tasks of each form
+    ran, and how often a place's name in a task meant that place."""
 
     def __init__(self):
         self.bm25 = BM25()
+        self.forms = defaultdict(Counter)
         self.tasks = []
         self.lower = []
         self.labels = []
@@ -333,6 +353,9 @@ class History(object):
 
     def add(self, task, label, ts=""):
         self.bm25.add(tokens(task), label)
+        form = form_of(task)
+        if form:
+            self.forms[form][label] += 1
         self.tasks.append(task)
         self.lower.append(task.lower())
         self.labels.append(label)
@@ -340,6 +363,14 @@ class History(object):
 
     def query(self, task, k=10):
         return self.bm25.query(tokens(task), k)
+
+    def form_record(self, form):
+        """(the place most past tasks of this form ran in, how many did, how many there are)"""
+        c = self.forms.get(form)
+        if not c:
+            return None, 0, 0
+        best, k = c.most_common(1)[0]
+        return best, k, sum(c.values())
 
     def recent(self, days=30, now=None, top=15):
         """The places past sessions ran in most over the last days."""
@@ -601,6 +632,12 @@ def route(task, places, cfg, index=None, use_model=True, context="", explicit=No
                 w[label] += sc
             hints.append("similar past tasks ran in: " + ", ".join("%s (%.0f%%)" % (n, 100 * v / sum(w.values()))
                                                                    for n, v in w.most_common(4)))
+        form = form_of(task)
+        best, k, n = index.form_record(form) if form else (None, 0, 0)
+        if best and n >= int(sec.get("form_min_tasks")) and k >= float(sec.get("form_min_share")) * n:
+            signals.append(("form", best, "%d of %d past tasks shaped %r ran there" % (k, n, form)))
+        if best:
+            hints.append("past tasks shaped %r ran in: %s (%d of %d)" % (form, best, k, n))
     if name:
         hints.insert(0, "a path in the task lies in: " + name)
     if len(set(p for _, p, _ in signals)) == 1:
@@ -1235,7 +1272,7 @@ def cmd_eval(argv):
     total = sum(n for n, _ in stats.values())
     good = sum(k for _, k in stats.values())
     print("sessions %d (tested %d), places %d" % (len(rows), total, len(places)))
-    for how in ("explicit", "path", "name", "keyword", "history", "model", "guess", "default", "none"):
+    for how in ("explicit", "path", "name", "keyword", "history", "form", "model", "guess", "default", "none"):
         if how in stats:
             n, k = stats[how]
             print("  %-8s decided %4d (%4.1f%%)  right %4d (%5.1f%%)" % (how, n, 100.0 * n / total, k, 100.0 * k / n))

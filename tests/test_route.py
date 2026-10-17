@@ -115,6 +115,26 @@ class Tree(unittest.TestCase):
         d = self.route("answer the marketplace buyer about the warehouse listing", h)
         self.assertEqual((d["place"], d["how"]), ("web", "history"))
 
+    def test_form(self):
+        self.assertEqual(drover.form_of("fix colour to color"), "fix _ to _")
+        self.assertEqual(drover.form_of("fix Jon Smit to John Smith\nfix teh to the"), "fix _ to _")
+        self.assertEqual(drover.form_of("Say the single word yes."), "say the _")
+        self.assertIsNone(drover.form_of("look at this"))  # nothing but stopwords: no shape to learn
+        self.assertIsNone(drover.form_of("fix the login bug in the api so that it returns 401"))
+        self.assertIsNone(drover.form_of("2 bugs to fix"))
+
+    def test_form_learned_from_history(self):
+        self.cfg.set("drover", "history_min_score", "100")  # the form alone, without the BM25 match
+        h = self.history(("fix colour to color", "notes"), ("fix Jon Smit to John Smith\nfix teh to the", "notes"),
+                         ("fix Bostn to Boston", "notes"))
+        d = self.route("fix Gogle to Google", h)
+        self.assertEqual((d["place"], d["how"]), ("notes", "form"))
+        h.add("fix recieve to receive", "web")
+        h.add("fix Мир Ёлки to Мир ёлки", "web")
+        d = self.route("fix Gogle to Google", h)  # 3 of 5: not one-sided enough
+        self.assertNotEqual(d["how"], "form")
+        self.assertIn("ran in: notes (3 of 5)", " ".join(d["hints"]))
+
     def test_conflict_goes_past_the_rules(self):
         h = self.history(*[("answer the marketplace buyer about the shop listing %d" % i, "web") for i in range(5)])
         d = self.route("answer the marketplace buyer about the listing, the plan is in %s/code/infra/servers/office.md"
