@@ -461,13 +461,45 @@ def first_prompt(path):
     return None
 
 
-def history_index(cfg, places, records=None):
-    moved = moved_map(cfg)
-    idx = History()
-    for r in records if records is not None else history_records(cfg):
+def labelled(records, places, moved):
+    """(record, place) of each session that ran in a place, in time order."""
+    out = []
+    for r in records:
         p = place_for_path(r["cwd"] or "", places, moved, loose=True)
         if p:
-            idx.add(r["task"], p.name, r.get("ts"))
+            out.append((r, p.name))
+    return out
+
+
+REDONE_WITHIN = datetime.timedelta(hours=3)
+
+
+def drop_redone(rows):
+    """Leave out a session whose task ran again in another place within three hours: that is the
+    task moved to where it belonged, so the first place it ran in teaches nothing, and kept, it
+    sends the same task back there."""
+    def stamp(r):
+        try:
+            return datetime.datetime.strptime((r.get("ts") or "")[:19], "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return None
+    out, later = [], {}
+    for r, place in reversed(rows):
+        key = " ".join(r["task"].lower().split())
+        ts, nxt = stamp(r), later.get(key)
+        redone = (nxt and nxt[1] != place and ts and nxt[0] and nxt[0] - ts <= REDONE_WITHIN
+                  and len(tokens(r["task"])) >= 3)
+        if not redone:
+            out.append((r, place))
+        later[key] = (ts, place)
+    return out[::-1]
+
+
+def history_index(cfg, places, records=None):
+    idx = History()
+    rows = labelled(records if records is not None else history_records(cfg), places, moved_map(cfg))
+    for r, name in drop_redone(rows):
+        idx.add(r["task"], name, r.get("ts"))
     return idx
 
 
@@ -1246,12 +1278,8 @@ def cmd_eval(argv):
     moved = moved_map(cfg)
     recs = history_records(cfg)
     index = History()
-    rows = []
-    for r in recs:
-        p = place_for_path(r["cwd"] or "", places, moved, loose=True)
-        if not p or len(tokens(r["task"])) < 3:  # "ok", "c", a lone slash command: nothing to route by
-            continue
-        rows.append((r, p.name))
+    # "ok", "c", a lone slash command: nothing to route by
+    rows = [(r, n) for r, n in drop_redone(labelled(recs, places, moved)) if len(tokens(r["task"])) >= 3]
     test_from = 0
     if a.since:
         test_from = next((i for i, (r, _) in enumerate(rows) if (r["ts"] or "") >= a.since), len(rows))

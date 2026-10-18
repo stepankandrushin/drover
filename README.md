@@ -42,7 +42,9 @@ config.
    - **keyword**: a pattern from `[keywords]` in the config.
    - **history**: the first prompts of your past Claude Code sessions are indexed with BM25,
      with the directory each one ran in. If the ten most similar ones mostly ran in one place,
-     and the match is strong enough, that place is the signal.
+     and the match is strong enough, that place is the signal. A task that ran again in another
+     place within three hours counts only there: it was moved to where it belonged, and the
+     first run would send the same task back.
    - **form**: a short task (up to three lines, the first of up to eight words) has a shape: its
      first word, its stopwords, and `_` for each run of other words, so `fix colour to color`
      is `fix _ to _`. If there are at least three past tasks of that shape and three in four of

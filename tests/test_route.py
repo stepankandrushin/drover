@@ -145,6 +145,16 @@ class Tree(unittest.TestCase):
         d = self.route("something nobody has asked before")
         self.assertEqual((d["place"], d["how"]), ("infra", "default"))
 
+    def test_a_task_redone_elsewhere_soon_after_counts_only_there(self):
+        code = os.path.join(self.root, "code")
+        task = "the agent in the shop tab spent fifty thousand tokens at its start"
+        recs = [{"ts": "2026-10-18T14:00:00.000Z", "cwd": os.path.join(code, "web"), "task": task},
+                {"ts": "2026-10-18T14:20:00.000Z", "cwd": os.path.join(code, "notes"), "task": task + "\n"},
+                {"ts": "2026-10-18T14:30:00.000Z", "cwd": os.path.join(code, "infra"), "task": "commit and push the changes"},
+                {"ts": "2026-10-18T20:00:00.000Z", "cwd": os.path.join(code, "web"), "task": "commit and push the changes"}]
+        h = drover.history_index(self.cfg, self.places, recs)
+        self.assertEqual(h.labels, ["notes", "infra", "web"])  # hours apart, the same command is two tasks
+
     def test_loose_history_label(self):
         p = drover.place_for_path(os.path.join(drover.HOME, "frigate", "x"), self.places, loose=True)
         self.assertEqual(p.name, "frigate")
